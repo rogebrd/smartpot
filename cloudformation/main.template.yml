@@ -1,0 +1,139 @@
+Resources:
+# Bucket for Sensor Data
+  DataStorageBucket:
+    Type: AWS::S3::Bucket
+# Api Gateway for publishing data
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: smartPot Gateway
+      Description: smartPot Api Gateway
+  
+# Put method to publish data to
+  UploadDataMethod:
+    Type: AWS::ApiGateway::Method
+    Properties: 
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ResourceId: !GetAtt
+        - ApiGateway
+        - RootResourceId
+      RestApiId: !Ref ApiGateway
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: "AWS"
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations"
+          - lambdaArn: !GetAtt
+            - UploadDataLambda
+            - Arn
+        RequestTemplates:
+          "application/json": "{\"body\" : $input.json('$')}"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+  OptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ResourceId: !GetAtt
+        - ApiGateway
+        - RootResourceId
+      RestApiId: !Ref ApiGateway
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        Type: MOCK
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+          ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: false
+              method.response.header.Access-Control-Allow-Methods: false
+              method.response.header.Access-Control-Allow-Origin: false
+# Lambda hookup for API Gateway
+  UploadDataLambdaApiGatewayInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt
+        - UploadDataLambda
+        - Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/"
+
+# Lambda Function for uploading data
+  UploadDataLambda:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref DataStorageBucket
+      Handler: 'lambda/uploadData.lambda_handler'
+      Code:
+        S3Bucket: smartpot-codedeploymentbucket
+        S3Key: build/lambda.zip
+      Runtime: python3.7
+      Description: Takes api calls from sensors and uploads to s3
+      Timeout: 30
+      MemorySize: 128
+      Role: !GetAtt
+          - UploadDataLambdaInvocationRole
+          - Arn
+# IAM permissions for lambda
+  UploadDataLambdaInvocationRole:
+      Type: AWS::IAM::Role
+      Properties:
+        Description: Role for lambda to upload data
+        AssumeRolePolicyDocument:
+          Statement:
+            - Action: ['sts:AssumeRole']
+              Effect: Allow
+              Principal:
+                Service: [lambda.amazonaws.com]
+          Version: '2012-10-17'
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+            - PolicyDocument:
+                Statement:
+                  Action: '*'
+                  Effect: Allow
+                  Resource: !Sub 
+                    - 'arn:aws:s3:::${Bucket}/*'
+                    - { Bucket: !Ref DataStorageBucket }
+                Version: '2012-10-17'
+              PolicyName: UploadDataS3Policy
+# API Gateway Deployment 
+# last to avoid no method errors
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+#Specify stack outputs
+Outputs:
+  ApiGatewayInvokeURL:
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/"
+    Description: URL to Invoke Api Gateway
+  StackArn:
+    Value: !Ref AWS::StackId
+    Description: Stack Id
